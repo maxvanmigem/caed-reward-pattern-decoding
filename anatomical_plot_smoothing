@@ -1,0 +1,29 @@
+# Plotting anatomical scan per participant + smoothing image
+
+import os
+import matplotlib.pyplot as plt
+from nilearn import plotting, image, datasets
+
+# Specify working directory path
+directory = '/Users/Merel_1/Desktop/Case Studies/data'
+
+# Change the working directory
+os.chdir(directory)
+
+# Load fMRI image (3D)
+fmri_img = 'anat_1.nii'
+
+# Plot a 3D image using the plotting function
+plotting.plot_stat_map(fmri_img, title='fMRI Image', display_mode='ortho', cmap='hot', threshold=3)
+
+# Display the plot
+plotting.show()
+
+# Smoothing function
+smooth_anat_img = image.smooth_img(fmri_img, fwhm=3)
+
+# Pass it to nilearn plotting funcion
+plotting.plot_img(smooth_anat_img)
+
+# Display the plot
+plotting.show()
