@@ -10,6 +10,7 @@ import nilearn,os,glob
 
 from nilearn import plotting
 from nilearn import image
+from nilearn import maskers
 from nilearn.decoding import Decoder
 from sklearn.model_selection import KFold
 
@@ -63,71 +64,116 @@ TR = 1.5
 """ 
 Create behavioural labels from event files for model training i.e. label the fMRI timeslices
 """
-behavioral = pd.read_csv(event_paths[0][0], sep= '\t')
-# slice_dur = np.array([1.5 for x in nilearn.image.iter_img(func_paths[0][0])]) # safer
-slice_dur = np.array([1.5 for x in range(400)]) # faster
-slice_onset = np.zeros(len(slice_dur))
+# Make a very large dataframe with the behavioral labels
+# Looped per subject
+for sub in range(n_sub):
+    # and looped per run
+    for run in range(n_runs):   
 
-for ind,dur in enumerate(slice_dur):
-    if ind == 0:
-        slice_onset[ind] = TR
-    else:
-        slice_onset[ind] = slice_onset[ind-1] + TR
+        # read the behavior data  
+        behavioral = pd.read_csv(event_paths[sub][run], sep= '\t')
 
-slice_timing = {'slice_onset': slice_onset, 'duration' : slice_dur}
-pre_label_df = pd.DataFrame(slice_timing)
+        # create list with the length of the timeslices in this run
+        # slice_dur = np.array([1.5 for x in nilearn.image.iter_img(func_paths[0][0])]) # safer alternative if runs dont have the same length
+        slice_dur = np.array([1.5 for x in range(400)]) # faster
+
+        # make another list to idicating the timing of the slices
+        slice_onset = np.zeros(len(slice_dur))
+
+        for ind,dur in enumerate(slice_dur):
+            if ind == 0:
+                slice_onset[ind] = TR
+            else:
+                slice_onset[ind] = slice_onset[ind-1] + TR
+
+        # combine these lists in a dataframe
+        slice_timing = {'slice_onset': slice_onset, 'duration' : slice_dur}
+        pre_label_df = pd.DataFrame(slice_timing)
+
+        # 'bet' represents the end of a trial in the event files and thes rows also contain al the trial info we want, so we only select these  
+        sub_trial_set = behavioral.loc[behavioral['event_type']=='bet']
+
+        # we now use this subset to label the fmri slices to the apropriate trials  
+        onset_ndarr = sub_trial_set['onset'].to_numpy()
+        trial_ndarr = np.zeros(400)
+        # to do this we check for each slice when they occur in relation to the behavioral onset times
+        count = 0
+        trt = 0
+        while count< len(slice_onset)-1:
+            if trt >= len(onset_ndarr):
+                trial_ndarr[count+1] = 999
+                trt +=1
+                count +=1
+            elif slice_onset[count] < onset_ndarr[trt]:
+                trial_ndarr[count+1] = trt
+                count += 1
+            else:
+                trt +=1
+
+        pre_label_df['trial'] = trial_ndarr
+
+        # Combine these arrays into a nice pandas dataframe
+        subset_behav = sub_trial_set[['onset','points_high','bet_jar_type']].reset_index()
+        label_df = pd.merge(pre_label_df, subset_behav,how= 'left', left_on=['trial'],right_index= True)
+
+        # Add columns indicating to which subject and  to which run this data belongs 
+        label_df['subject'] = sub
+        label_df['run'] = run
+
+        # Merge this all into a very large dataset
+        if (sub == 0) and (run == 0):
+            big_behav_set = label_df
+        else: 
+            big_behav_set = pd.concat([big_behav_set,label_df],axis=0, ignore_index=True)
 
 
 # %%
-sub_trial_set = behavioral.loc[behavioral['event_type']=='bet']
-onset_ndarr = sub_trial_set['onset'].to_numpy()
-trial_ndarr = np.zeros(400)
-
-count = 0
-trt = 0
-while count< len(slice_onset)-1:
-    if slice_onset[count] < onset_ndarr[trt]:
-        trial_ndarr[count+1] = trt
-        count += 1
-    else:
-        trt +=1
-
-pre_label_df['trial'] = trial_ndarr
-subset_behav = sub_trial_set[['onset','points_high','bet_jar_type']].reset_index()
-label_df = pd.merge(pre_label_df, subset_behav,how= 'left', left_on=['trial'],right_index= True)
-
-# %%
-conditions = label_df['bet_jar_type']
-
-new_behav = pd.read_csv('H:/Documents/cases_in_analysis_of_exp_data/behavdata\BA3550.csv')
+conditions = big_behav_set['bet_jar_type']
 mask_rvs_fname = 'H:/Documents/cases_in_analysis_of_exp_data/R_VS.nii.gz'
 
+
+# %%
+fmri_roi_list = []
+for sub in range(n_sub):
+
+    for run in range(n_runs):
+        downsampled_roi = nilearn.image.resample_to_img(source_img = mask_rvs_fname, target_img = func_paths[0][run], interpolation = 'nearest') 
+        # Merge this all into a very large dataset
+        fmri_roi_list.append(downsampled_roi)
+
+fmri_roi_set = image.concat_imgs(fmri_roi_list,ensure_ndim=4)
+
+
+# %%
+fmri_roi_set = image.concat_imgs(fmri_roi_list,ensure_ndim=4)
+
+# %%
+import nibabel as nib
+
+dimensions = fmri_roi_set.header.get_data_shape()
+print(dimensions)
 
 # %%
 for i in range(len(anat_paths)):
     plotting.plot_roi(mask_rvs_fname, bg_img=anat_paths[i][0], cmap="Paired")
 
 # %%
-fmri_niimgs_train = image.index_img(func_paths[0][0], slice(0, -30))
-fmri_niimgs_test = image.index_img(func_paths[0][0], slice(-30, None))
-conditions_train = conditions[:-30]
-conditions_test = conditions[-30:]
+from sklearn.model_selection import KFold
 
-decoder = Decoder(
-    estimator="svc", mask=mask_rvs_fname, standardize="zscore_sample"
-)
-decoder.fit(fmri_niimgs_train, conditions_train)
+cv = KFold(n_splits=5)
 
-prediction = decoder.predict(fmri_niimgs_test)
-
-# The prediction accuracy is calculated on the test data: this is the accuracy
-# of our model on examples it hasn't seen to examine how well the model perform
-# in general.
-
-print(
-    "Prediction Accuracy: {:.3f}".format(
-        (prediction == conditions_test).sum() / float(len(conditions_test))
+for fold, (train, test) in enumerate(cv.split(conditions), start=1):
+    decoder = Decoder(
+        estimator="svc", standardize="zscore_sample"
     )
-)
+    decoder.fit(image.index_img(fmri_roi_set, train), conditions[train])
+    prediction = decoder.predict(image.index_img(fmri_roi_set, test))
+    print(
+        "CV Fold {:01d} | Prediction Accuracy: {:.3f}".format(
+            fold,
+            (prediction == conditions[test]).sum()
+            / float(len(conditions[test])),
+        )
+    )
 
 
