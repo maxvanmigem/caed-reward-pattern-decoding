@@ -1,6 +1,7 @@
 # %%
 """ 
-Script to extract, compute and plot roi images
+Script to extract, compute and plot roi images 
+Using Julich-Brain Atlas: https://search.kg.ebrains.eu/instances/99437b56-3add-4d19-9bfd-5b413dbf5173
 """
 # Written by Merel De Merlier, Sam Vandermeulen and Max Van Migem
 
